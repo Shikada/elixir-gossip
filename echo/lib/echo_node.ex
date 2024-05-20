@@ -3,7 +3,7 @@ defmodule EchoNode do
   use GenServer
 
   def start_link(state) do
-    GenServer.start_link(__MODULE__, state, name: EchoNode)
+    GenServer.start_link(__MODULE__, state)
   end
 
   defp create_message_reply(state, message, reply_msg_type, extra_body_values) do
@@ -45,8 +45,8 @@ defmodule EchoNode do
 
   @impl true
   def init(state) do
-    # Logger.add_handlers(:echo)
-    # Logger.info("Started da node")
+    Logger.add_handlers(:echo)
+    Logger.info("Started da node")
     new_state = Map.put(state, :current_message_id, 0)
     new_state = Map.put(new_state, :values, MapSet.new())
 
@@ -56,7 +56,7 @@ defmodule EchoNode do
   @impl true
   def handle_cast({:init, message}, state) do
     node_id = message.body.node_id
-    # Logger.info("Got info message with id #{node_id}")
+    Logger.info("Got info message with id #{node_id}")
     new_state = Map.put(state, :node_id, node_id)
 
     response = %{
@@ -68,7 +68,7 @@ defmodule EchoNode do
       }
     }
 
-    IO.puts(Jason.encode!(response))
+    NodeRouter.send_feeder_socket(node_id, Jason.encode!(response))
 
     {:noreply, new_state}
   end
@@ -86,7 +86,7 @@ defmodule EchoNode do
       }
     }
 
-    IO.puts(Jason.encode!(response))
+    NodeRouter.send_feeder_socket(state.node_id, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -104,7 +104,7 @@ defmodule EchoNode do
       }
     }
 
-    IO.puts(Jason.encode!(response))
+    NodeRouter.send_feeder_socket(state.node_id, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -122,7 +122,7 @@ defmodule EchoNode do
         end
 
       {new_state, response} = create_message_reply(new_state, message, :broadcast_ok, %{})
-      IO.puts(Jason.encode!(response))
+      NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -138,7 +138,7 @@ defmodule EchoNode do
       {new_state, response} =
         create_message_reply(state, message, :read_ok, %{messages: MapSet.to_list(state.values)})
 
-      IO.puts(Jason.encode!(response))
+        NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -165,11 +165,12 @@ defmodule EchoNode do
           end)
         )
 
+      self = self()
       # start gossip loop that will perform periodic gossip to neighbours in the background
-      Task.Supervisor.start_child(Echo.TaskSupervisor, &gossip_loop/0)
+      Task.Supervisor.start_child(Echo.TaskSupervisor, fn -> gossip_loop(self) end)
 
       {new_state, response} = create_message_reply(new_state, message, :topology_ok, %{})
-      IO.puts(Jason.encode!(response))
+      NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -257,7 +258,7 @@ defmodule EchoNode do
             values: MapSet.to_list(gossip_values)
           })
 
-        IO.puts(Jason.encode!(message))
+        NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(message))
 
         new_state
       else
@@ -270,9 +271,9 @@ defmodule EchoNode do
     end
   end
 
-  defp gossip_loop() do
-    GenServer.cast(EchoNode, :do_gossip)
-    Process.sleep(100)
-    gossip_loop()
+  defp gossip_loop(pid) do
+    GenServer.cast(pid, :do_gossip)
+    Process.sleep(50)
+    gossip_loop(pid)
   end
 end

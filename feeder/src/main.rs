@@ -1,12 +1,10 @@
 use std::ffi::OsStr;
-use std::fs::remove_file;
 use std::io::{stdin, stdout, BufRead, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::thread;
 
 use rand::distributions::{Alphanumeric, DistString};
-use glob::glob;
 
 // use regex::Regex;
 
@@ -19,13 +17,17 @@ fn main() -> anyhow::Result<()> {
     let feeder_out_path = Path::new(OsStr::new(&feeder_out_path_string));
     let echo_path = Path::new("/tmp/echo.sock");
 
-    for path in glob("/tmp/feeder-*.sock").expect("Failed glob pattern") {
-        remove_file(path.unwrap()).expect("Failed to delete feeder socket file");
-    }
+    // for path in glob("/tmp/feeder-*.sock").expect("Failed glob pattern") {
+    //     //remove_file(path.unwrap()).expect("Failed to delete feeder socket file");
+    //     match remove_file(path.unwrap()) {
+    //         Ok(()) => (),
+    //         Err(_) => ()
+    //     }
+    // }
 
-    if echo_path.exists() {
-        remove_file(echo_path)?;
-    }
+    // if echo_path.exists() {
+    //     remove_file(echo_path)?;
+    // }
 
     let feeder_in_sock = UnixDatagram::bind(feeder_in_path)?;
     let feeder_out_sock = UnixDatagram::bind(feeder_out_path)?;
