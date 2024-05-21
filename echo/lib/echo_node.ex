@@ -6,6 +6,10 @@ defmodule EchoNode do
     GenServer.start_link(__MODULE__, state)
   end
 
+  def set_bound_echo_socket(pid, socket) do
+    GenServer.call(pid, {:set_socket, socket})
+  end
+
   defp create_message_reply(state, message, reply_msg_type, extra_body_values) do
     message_id = state.current_message_id
 
@@ -43,6 +47,10 @@ defmodule EchoNode do
     {new_state, message}
   end
 
+  defp send_message(dest_node_id, json_message) do
+    GenServer.cast(self(), {:send, dest_node_id, json_message})
+  end
+
   @impl true
   def init(state) do
     Logger.add_handlers(:echo)
@@ -51,6 +59,16 @@ defmodule EchoNode do
     new_state = Map.put(new_state, :values, MapSet.new())
 
     {:ok, new_state}
+  end
+
+  @impl true
+  def handle_call({:set_socket, socket}, _from, state) do
+    {:reply, :ok, Map.put(state, :echo_socket, socket)}
+  end
+
+  @impl true
+  def handle_call({:put, node_id, {pid, feeder_socket}}, _from, state) do
+    {:reply, :ok, Map.put(state, node_id, {pid, feeder_socket})}
   end
 
   @impl true
@@ -68,7 +86,7 @@ defmodule EchoNode do
       }
     }
 
-    NodeRouter.send_feeder_socket(node_id, Jason.encode!(response))
+    send_message(node_id, Jason.encode!(response))
 
     {:noreply, new_state}
   end
@@ -86,7 +104,7 @@ defmodule EchoNode do
       }
     }
 
-    NodeRouter.send_feeder_socket(state.node_id, Jason.encode!(response))
+    send_message(state.node_id, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -104,7 +122,7 @@ defmodule EchoNode do
       }
     }
 
-    NodeRouter.send_feeder_socket(state.node_id, Jason.encode!(response))
+    send_message(state.node_id, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -122,7 +140,7 @@ defmodule EchoNode do
         end
 
       {new_state, response} = create_message_reply(new_state, message, :broadcast_ok, %{})
-      NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
+      send_message(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -138,7 +156,7 @@ defmodule EchoNode do
       {new_state, response} =
         create_message_reply(state, message, :read_ok, %{messages: MapSet.to_list(state.values)})
 
-        NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
+        send_message(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -170,7 +188,7 @@ defmodule EchoNode do
       Task.Supervisor.start_child(Echo.TaskSupervisor, fn -> gossip_loop(self) end)
 
       {new_state, response} = create_message_reply(new_state, message, :topology_ok, %{})
-      NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(response))
+      send_message(new_state.node_id, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -178,6 +196,19 @@ defmodule EchoNode do
         Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
+  end
+
+  @impl true
+  def handle_cast({:send, dest_node_id, message}, state) do
+    {_pid, feeder_socket_path} = Map.get(state, dest_node_id)
+
+    :socket.sendto(
+      state.echo_socket,
+      message,
+      %{family: :local, path: feeder_socket_path}
+    )
+
+    {:noreply, state}
   end
 
   @impl true
@@ -258,7 +289,7 @@ defmodule EchoNode do
             values: MapSet.to_list(gossip_values)
           })
 
-        NodeRouter.send_feeder_socket(new_state.node_id, Jason.encode!(message))
+        send_message(new_state.node_id, Jason.encode!(message))
 
         new_state
       else
@@ -273,7 +304,7 @@ defmodule EchoNode do
 
   defp gossip_loop(pid) do
     GenServer.cast(pid, :do_gossip)
-    Process.sleep(50)
+    Process.sleep(100)
     gossip_loop(pid)
   end
 end

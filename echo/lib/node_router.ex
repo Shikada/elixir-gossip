@@ -9,8 +9,11 @@ defmodule NodeRouter do
     GenServer.call(NodeRouter, {:set_socket, socket})
   end
 
-  def recv_echo_socket() do
-    socket = GenServer.call(NodeRouter, :get_socket)
+  def get_echo_socket() do
+    GenServer.call(NodeRouter, :get_socket)
+  end
+
+  def recv_from_socket(socket) do
     {address, data} = case :socket.recvfrom(socket) do
       {:ok, {source, data}} -> {source, :erlang.iolist_to_binary(data)}
       {:error, reason} -> IO.puts "SHIT: #{reason}"

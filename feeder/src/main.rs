@@ -11,11 +11,11 @@ use rand::distributions::{Alphanumeric, DistString};
 fn main() -> anyhow::Result<()> {
     // let init_regex = Regex::new(r#""node_id":\s+"(.+)""#).expect("Tried to create invalid regex for init message");
     let random_feeder_name = Alphanumeric.sample_string(&mut rand::thread_rng(), 8);
-    let feeder_in_path_string = format!("/tmp/feeder-in-{random_feeder_name}.sock");
+    let feeder_in_path_string = format!("/tmp/echo/feeder-in-{random_feeder_name}.sock");
     let feeder_in_path = Path::new(OsStr::new(&feeder_in_path_string));
-    let feeder_out_path_string = format!("/tmp/feeder-out-{random_feeder_name}.sock");
+    let feeder_out_path_string = format!("/tmp/echo/feeder-out-{random_feeder_name}.sock");
     let feeder_out_path = Path::new(OsStr::new(&feeder_out_path_string));
-    let echo_path = Path::new("/tmp/echo.sock");
+    let echo_path = Path::new("/tmp/echo/echo.sock");
 
     // for path in glob("/tmp/feeder-*.sock").expect("Failed glob pattern") {
     //     //remove_file(path.unwrap()).expect("Failed to delete feeder socket file");
@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     let feeder_in_thread_handle = thread::spawn(move || {
         // let echo_sock = UnixDatagram::bind(echo_path).unwrap();
         let mut stdout = stdout().lock();
-        let mut buffer = [0; 2048];
+        let mut buffer = [0; 4096];
 
         loop {
             // let (rec_size, rec_addr) = echo_sock.recv_from(buffer.as_mut_slice()).unwrap();

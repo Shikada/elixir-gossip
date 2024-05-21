@@ -4,12 +4,13 @@ defmodule Echo do
   @moduledoc """
   Documentation for `Echo`.
   """
-  @echo_socket_path "/tmp/echo.sock"
+  @echo_socket_path "/tmp/echo/echo.sock"
   @feeder_socket_name_regex ~r/feeder-out-(.{8})/
 
   def start(_type, _args) do
     children = [
       {NodeRouter, %{}},
+      {SocketRouter, %{}},
       {Task.Supervisor, name: Echo.TaskSupervisor}
     ]
 
@@ -21,8 +22,8 @@ defmodule Echo do
     File.rm(@echo_socket_path)
     {:ok, socket} = :socket.open(:local, :dgram, %{})
     :socket.bind(socket, %{family: :local, path: @echo_socket_path})
-    NodeRouter.set_bound_echo_socket(socket)
-    Task.Supervisor.start_child(Echo.TaskSupervisor, &recv_echo_socket_loop/0)
+    # SocketRouter.set_bound_echo_socket(socket)
+    Task.Supervisor.start_child(Echo.TaskSupervisor, fn -> recv_echo_socket_loop(socket) end)
 
     {:ok, supervisor}
   end
@@ -45,8 +46,8 @@ defmodule Echo do
   #   io_loop()
   # end
 
-  defp recv_echo_socket_loop() do
-    {source, data} = NodeRouter.recv_echo_socket()
+  defp recv_echo_socket_loop(socket) do
+    {source, data} = NodeRouter.recv_from_socket(socket)
     message = Jason.decode!(data, keys: :atoms)
     message_type = message.body.type
 
@@ -54,10 +55,17 @@ defmodule Echo do
       # List.last gets the capture from this regex
       socket_name = Regex.run(@feeder_socket_name_regex, source) |> List.last()
       {:ok, pid} = EchoNode.start_link(%{})
+      EchoNode.set_bound_echo_socket(pid, socket)
+      GenServer.call(pid, {:put, message.dest, {pid, "/tmp/echo/feeder-in-#{socket_name}.sock"}})
 
       GenServer.call(
         NodeRouter,
-        {:put, message.dest, {pid, "/tmp/feeder-in-#{socket_name}.sock"}}
+        {:put, message.dest, {pid, "/tmp/echo/feeder-in-#{socket_name}.sock"}}
+      )
+
+      GenServer.call(
+        SocketRouter,
+        {:put, message.dest, "/tmp/echo/feeder-in-#{socket_name}.sock"}
       )
     end
 
@@ -66,7 +74,7 @@ defmodule Echo do
       {String.to_atom(message_type), message}
     )
 
-    recv_echo_socket_loop()
+    recv_echo_socket_loop(socket)
   end
 
   defp dispatch_message(node_pid, {:init, message}) do
