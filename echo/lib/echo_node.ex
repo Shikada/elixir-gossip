@@ -47,8 +47,8 @@ defmodule EchoNode do
     {new_state, message}
   end
 
-  defp send_message(json_message) do
-    GenServer.cast(self(), {:send, json_message})
+  defp send_message(sender_pid, json_message) do
+    GenServer.cast(sender_pid, {:send, json_message})
   end
 
   @impl true
@@ -75,7 +75,15 @@ defmodule EchoNode do
   def handle_call({:start_comms, socket_name, feeder_socket}, _from, state) do
     {:ok, socket} = :socket.open(:local, :dgram, %{})
     :socket.bind(socket, %{family: :local, path: "/tmp/echo/node-#{socket_name}.sock"})
-    new_state = Map.put(state, :socket, socket) |> Map.put(:feeder_socket, feeder_socket)
+
+    {:ok, sender_pid} =
+      NodeSender.start_link(%{socket: socket, feeder_socket: feeder_socket})
+
+    new_state =
+      Map.put(state, :socket, socket)
+      |> Map.put(:feeder_socket, feeder_socket)
+      |> Map.put(:sender_pid, sender_pid)
+
     self = self()
     Task.Supervisor.start_child(Echo.TaskSupervisor, fn -> receive_loop(self, socket) end)
 
@@ -97,7 +105,7 @@ defmodule EchoNode do
       }
     }
 
-    send_message(Jason.encode!(response))
+    send_message(state.sender_pid, Jason.encode!(response))
 
     {:noreply, new_state}
   end
@@ -115,7 +123,7 @@ defmodule EchoNode do
       }
     }
 
-    send_message(Jason.encode!(response))
+    send_message(state.sender_pid, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -133,7 +141,7 @@ defmodule EchoNode do
       }
     }
 
-    send_message(Jason.encode!(response))
+    send_message(state.sender_pid, Jason.encode!(response))
 
     {:noreply, state}
   end
@@ -151,7 +159,7 @@ defmodule EchoNode do
         end
 
       {new_state, response} = create_message_reply(new_state, message, :broadcast_ok, %{})
-      send_message(Jason.encode!(response))
+      send_message(state.sender_pid, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -167,7 +175,7 @@ defmodule EchoNode do
       {new_state, response} =
         create_message_reply(state, message, :read_ok, %{messages: MapSet.to_list(state.values)})
 
-        send_message(Jason.encode!(response))
+      send_message(state.sender_pid, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -199,7 +207,7 @@ defmodule EchoNode do
       Task.Supervisor.start_child(Echo.TaskSupervisor, fn -> gossip_loop(self) end)
 
       {new_state, response} = create_message_reply(new_state, message, :topology_ok, %{})
-      send_message(Jason.encode!(response))
+      send_message(state.sender_pid, Jason.encode!(response))
 
       {:noreply, new_state}
     rescue
@@ -211,13 +219,15 @@ defmodule EchoNode do
 
   @impl true
   def handle_cast({:send, message}, state) do
-    Logger.info "gonna send from #{inspect(state.socket)}"
+    Logger.info("gonna send from #{inspect(state.socket)}")
+
     :socket.sendto(
       state.socket,
       message,
       %{family: :local, path: state.feeder_socket}
     )
-    Logger.info "sent to #{state.feeder_socket}"
+
+    Logger.info("sent to #{state.feeder_socket}")
 
     {:noreply, state}
   end
@@ -300,7 +310,7 @@ defmodule EchoNode do
             values: MapSet.to_list(gossip_values)
           })
 
-        send_message(Jason.encode!(message))
+        send_message(new_state.sender_pid, Jason.encode!(message))
 
         new_state
       else
@@ -315,7 +325,7 @@ defmodule EchoNode do
 
   defp receive_loop(pid, socket) do
     {:ok, data} = :socket.recv(socket)
-    Logger.info "Got something from node socket"
+    Logger.info("Got something from node socket")
     message = Jason.decode!(data, keys: :atoms)
     message_type = message.body.type
     GenServer.cast(pid, {String.to_atom(message_type), message})
