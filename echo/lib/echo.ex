@@ -19,6 +19,9 @@ defmodule Echo do
 
     # delete socket file if it already exist (from previous run)
     # if the file already exists then :socket.bind call will error
+    if not File.exists?("/tmp/echo/") do
+      File.mkdir("/tmp/echo/")
+    end
     File.rm(@echo_socket_path)
     {:ok, socket} = :socket.open(:local, :dgram, %{})
     :socket.bind(socket, %{family: :local, path: @echo_socket_path})
@@ -56,52 +59,38 @@ defmodule Echo do
       socket_name = Regex.run(@feeder_socket_name_regex, source) |> List.last()
       {:ok, pid} = EchoNode.start_link(%{})
       EchoNode.set_bound_echo_socket(pid, socket)
-      GenServer.call(pid, {:put, message.dest, {pid, "/tmp/echo/feeder-in-#{socket_name}.sock"}})
-
-      GenServer.call(
-        NodeRouter,
-        {:put, message.dest, {pid, "/tmp/echo/feeder-in-#{socket_name}.sock"}}
-      )
-
-      GenServer.call(
-        SocketRouter,
-        {:put, message.dest, "/tmp/echo/feeder-in-#{socket_name}.sock"}
-      )
+      GenServer.call(pid, {:start_comms, socket_name, "/tmp/echo/feeder-in-#{socket_name}.sock"})
+      GenServer.cast(pid, {:init, message})
     end
-
-    dispatch_message(
-      GenServer.call(NodeRouter, {:get_pid, message.dest}),
-      {String.to_atom(message_type), message}
-    )
 
     recv_echo_socket_loop(socket)
   end
 
-  defp dispatch_message(node_pid, {:init, message}) do
-    GenServer.cast(node_pid, {:init, message})
-  end
+  # defp dispatch_message(node_pid, {:init, message}) do
+  #   GenServer.cast(node_pid, {:init, message})
+  # end
 
-  defp dispatch_message(node_pid, {:echo, message}) do
-    GenServer.cast(node_pid, {:echo, message})
-  end
+  # defp dispatch_message(node_pid, {:echo, message}) do
+  #   GenServer.cast(node_pid, {:echo, message})
+  # end
 
-  defp dispatch_message(node_pid, {:generate, message}) do
-    GenServer.cast(node_pid, {:generate, message})
-  end
+  # defp dispatch_message(node_pid, {:generate, message}) do
+  #   GenServer.cast(node_pid, {:generate, message})
+  # end
 
-  defp dispatch_message(node_pid, {:broadcast, message}) do
-    GenServer.cast(node_pid, {:broadcast, message})
-  end
+  # defp dispatch_message(node_pid, {:broadcast, message}) do
+  #   GenServer.cast(node_pid, {:broadcast, message})
+  # end
 
-  defp dispatch_message(node_pid, {:read, message}) do
-    GenServer.cast(node_pid, {:read, message})
-  end
+  # defp dispatch_message(node_pid, {:read, message}) do
+  #   GenServer.cast(node_pid, {:read, message})
+  # end
 
-  defp dispatch_message(node_pid, {:topology, message}) do
-    GenServer.cast(node_pid, {:topology, message})
-  end
+  # defp dispatch_message(node_pid, {:topology, message}) do
+  #   GenServer.cast(node_pid, {:topology, message})
+  # end
 
-  defp dispatch_message(node_pid, {:gossip, message}) do
-    GenServer.cast(node_pid, {:gossip, message})
-  end
+  # defp dispatch_message(node_pid, {:gossip, message}) do
+  #   GenServer.cast(node_pid, {:gossip, message})
+  # end
 end
