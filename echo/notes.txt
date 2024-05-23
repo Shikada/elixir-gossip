@@ -1,0 +1,15 @@
+How to use profile Elixir app:
+Additional applications needed: :tools, :runtime-tools
+Start iex (with iex -S mix), then:
+
+:fprof.start
+:fprof.trace([:start, procs: :all])
+:fprof.trace(:stop)
+:fprof.profile
+:fprof.analyse(totals: false, dest: 'prof.analysis')
+
+Call erlgring to convert prof.analysis to cgrind format
+escript /some-path/erlgrind prof.analysis prof.cgrind
+
+Open the converted file with KCacheGrind
+kcachegrind prof.cgrind
