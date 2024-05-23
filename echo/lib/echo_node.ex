@@ -53,10 +53,12 @@ defmodule EchoNode do
 
   @impl true
   def init(state) do
-    Logger.add_handlers(:echo)
-    Logger.info("Started da node")
-    new_state = Map.put(state, :current_message_id, 0)
-    new_state = Map.put(new_state, :values, MapSet.new())
+    # Logger.add_handlers(:echo)
+    # Logger.info("Started da node")
+
+    new_state =
+      Map.put(state, :current_message_id, 0)
+      |> Map.put(:values, MapSet.new())
 
     {:ok, new_state}
   end
@@ -93,7 +95,7 @@ defmodule EchoNode do
   @impl true
   def handle_cast({:init, message}, state) do
     node_id = message.body.node_id
-    Logger.info("Got info message with id #{node_id}")
+    # Logger.info("Got info message with id #{node_id}")
     new_state = Map.put(state, :node_id, node_id)
 
     response = %{
@@ -164,7 +166,7 @@ defmodule EchoNode do
       {:noreply, new_state}
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
@@ -180,7 +182,7 @@ defmodule EchoNode do
       {:noreply, new_state}
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
@@ -196,7 +198,16 @@ defmodule EchoNode do
       new_state =
         Map.put(
           new_state,
-          :gossip_cache,
+          :known_cache,
+          Enum.reduce(new_state.neighbours, %{}, fn node_id, acc ->
+            Map.put(acc, node_id, MapSet.new())
+          end)
+        )
+
+      new_state =
+        Map.put(
+          new_state,
+          :stop_cache,
           Enum.reduce(new_state.neighbours, %{}, fn node_id, acc ->
             Map.put(acc, node_id, MapSet.new())
           end)
@@ -212,22 +223,18 @@ defmodule EchoNode do
       {:noreply, new_state}
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
 
   @impl true
   def handle_cast({:send, message}, state) do
-    Logger.info("gonna send from #{inspect(state.socket)}")
-
     :socket.sendto(
       state.socket,
       message,
       %{family: :local, path: state.feeder_socket}
     )
-
-    Logger.info("sent to #{state.feeder_socket}")
 
     {:noreply, state}
   end
@@ -237,10 +244,10 @@ defmodule EchoNode do
     try do
       # check if state of Node is ready to gossip
       neighbours = Map.get(state, :neighbours)
-      has_gossip_cache = Map.get(state, :gossip_cache)
+      has_known_cache = Map.get(state, :known_cache)
 
       # gossip to every neighbour. State is updated with each gossip, so reduce the final new state after all gossiping
-      if neighbours && has_gossip_cache do
+      if neighbours && has_known_cache do
         new_state =
           Enum.reduce(neighbours, state, fn node_id, _acc ->
             gossip_to_node(state, node_id, state)
@@ -252,7 +259,7 @@ defmodule EchoNode do
       end
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
@@ -260,36 +267,71 @@ defmodule EchoNode do
   @impl true
   def handle_cast({:gossip, message}, state) do
     try do
-      # if gossip_cache is not in state, this node is not ready for gossip message yet
-      new_values_set = MapSet.new(message.body.values)
+      # if known_cache is not in state, this node is not ready for gossip message yet
+      received_values_set = MapSet.new(message.body.values)
 
-      unless Map.get(state, :gossip_cache) do
+      unless Map.get(state, :known_cache) do
         {:noreply, state}
       else
+        # first find values new to this node
+        new_values_set = MapSet.new(MapSet.difference(received_values_set, state.values))
         # update values of this node
         new_state = Map.put(state, :values, MapSet.union(state.values, new_values_set))
 
+        # if state.node_id == "n2" do
+        #   Logger.info(
+        #     "Node n2 with old values '#{inspect(state.values)}' has new values '#{inspect(new_state.values)}'"
+        #   )
+        # end
+
+        # source node knowns the (new) values it just send, and about the values it's communication to this
+        # node to stop sending
+        new_known_values_set = MapSet.union(new_values_set, MapSet.new(message.body.stop_sending))
         # update values that this node knows about the node that sent this gossip message
         new_state = %{
           new_state
-          | :gossip_cache =>
+          | :known_cache =>
               Map.put(
-                new_state.gossip_cache,
+                new_state.known_cache,
                 message.src,
-                MapSet.union(Map.get(new_state.gossip_cache, message.src), new_values_set)
+                MapSet.union(Map.get(new_state.known_cache, message.src), new_known_values_set)
+              )
+        }
+
+        # update values that this node no longer needs to communicate to source node to stop sending
+        # (i.e. these values were in the stop_cache for the source node and we now observe it stopped sending them)
+        new_state = %{
+          new_state
+          | :stop_cache =>
+              Map.put(
+                new_state.stop_cache,
+                message.src,
+                MapSet.difference(Map.get(new_state.stop_cache, message.src), received_values_set)
+              )
+        }
+
+        # update values that this node wants the source node to stop sending
+        # (i.e. the values this node just received that are new to it)
+        new_state = %{
+          new_state
+          | :stop_cache =>
+              Map.put(
+                new_state.stop_cache,
+                message.src,
+                MapSet.union(Map.get(new_state.stop_cache, message.src), new_values_set)
               )
         }
 
         # Logger.info(
         #   "Node #{new_state.node_id} just handled a gossip from node #{message.src}.\nValues received: #{inspect(new_values_set)}\n" <>
-        #     "Current gossip cache: #{inspect(new_state.gossip_cache)}"
+        #     "Current gossip cache: #{inspect(new_state.known_cache)}"
         # )
 
         {:noreply, new_state}
       end
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
@@ -297,35 +339,50 @@ defmodule EchoNode do
   defp gossip_to_node(state, dst_node, state) do
     try do
       # only gossip values that we are not sure the destination node knows about
-      gossip_values = MapSet.difference(state.values, Map.get(state.gossip_cache, dst_node))
+      gossip_values = MapSet.difference(state.values, Map.get(state.known_cache, dst_node))
 
       # Logger.info(
       # "Node #{state.node_id} about to gossip to node #{dst_node}.\nValues being sent: #{inspect(gossip_values)}\n" <>
-      #       "Current gossip cache: #{inspect(state.gossip_cache)}"
+      #       "Current gossip cache: #{inspect(state.known_cache)}"
       # )
 
       if not Enum.empty?(gossip_values) do
         {new_state, message} =
           create_message_to_node(state, dst_node, :gossip, %{
-            values: MapSet.to_list(gossip_values)
+            values: MapSet.to_list(gossip_values),
+            stop_sending: MapSet.to_list(Map.get(state.stop_cache, dst_node))
           })
 
         send_message(new_state.sender_pid, Jason.encode!(message))
 
+        # if new_state.node_id == "n1" and dst_node == "n2" do
+        #   Logger.info(
+        #     "Node '#{new_state.node_id}' gossip to node '#{dst_node}', message: #{Jason.encode!(message)}," <>
+        #       "known: #{inspect(Map.get(new_state.known_cache, "n2"))}, stop: #{inspect(Map.get(new_state.stop_cache, "n2"))}"
+        #   )
+        # end
+
+        # if new_state.node_id == "n2" and dst_node == "n1" do
+        #   Logger.info(
+        #     "Node '#{new_state.node_id}' gossip to node '#{dst_node}', message: #{Jason.encode!(message)}," <>
+        #       "known: #{inspect(Map.get(new_state.known_cache, "n2"))}, stop: #{inspect(Map.get(new_state.stop_cache, "n2"))}"
+        #   )
+        # end
+
         new_state
       else
+        # Logger.info("Node '#{state.node_id}' has nothing to gossip")
         state
       end
     rescue
       e ->
-        Logger.error(Exception.format(:error, e, __STACKTRACE__))
+        # Logger.error(Exception.format(:error, e, __STACKTRACE__))
         reraise e, __STACKTRACE__
     end
   end
 
   defp receive_loop(pid, socket) do
     {:ok, data} = :socket.recv(socket)
-    Logger.info("Got something from node socket")
     message = Jason.decode!(data, keys: :atoms)
     message_type = message.body.type
     GenServer.cast(pid, {String.to_atom(message_type), message})

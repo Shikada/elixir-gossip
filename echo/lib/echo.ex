@@ -9,8 +9,8 @@ defmodule Echo do
 
   def start(_type, _args) do
     children = [
-      {NodeRouter, %{}},
-      {SocketRouter, %{}},
+      # {NodeRouter, %{}},
+      # {SocketRouter, %{}},
       {Task.Supervisor, name: Echo.TaskSupervisor}
     ]
 
@@ -58,7 +58,7 @@ defmodule Echo do
       # List.last gets the capture from this regex
       socket_name = Regex.run(@feeder_socket_name_regex, source) |> List.last()
       {:ok, pid} = EchoNode.start_link(%{})
-      EchoNode.set_bound_echo_socket(pid, socket)
+      # EchoNode.set_bound_echo_socket(pid, socket)
       GenServer.call(pid, {:start_comms, socket_name, "/tmp/echo/feeder-in-#{socket_name}.sock"})
       GenServer.cast(pid, {:init, message})
     end
